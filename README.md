@@ -53,7 +53,7 @@ Press `Win + S`, search for **PowerShell**, and open it. You do not need to run 
 **2. Clone the scanner repository**
 
 ```powershell
-git clone [https://github.com/theeurbanlegend/polinRiderScanner](https://github.com/theeurbanlegend/polinRiderScanner)
+git clone https://github.com/theeurbanlegend/polinRiderScanner
 cd polinrider-scanner
 ```
 
@@ -113,7 +113,7 @@ On Linux: press `Ctrl + Alt + T`, or search for Terminal in your app launcher.
 **2. Clone the scanner repository**
 
 ```bash
-git clone [https://github.com/theeurbanlegend/polinRiderScanner](https://github.com/theeurbanlegend/polinRiderScanner)
+git clone https://github.com/theeurbanlegend/polinRiderScanner
 cd polinrider-scanner
 ```
 
