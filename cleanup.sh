@@ -9,6 +9,7 @@ BRANCH_NAME="main"
 GITIGNORE_ONLY=false
 FONT_RETAIN_CSV=""
 VSCODE_RETAIN_CSV=""
+CONFIGS_CSV=""
 
 print_usage() {
     cat <<EOF
@@ -23,12 +24,14 @@ Options:
   --fonts=<csv>           Retain only these public/fonts files
   --vscode=<csv>          Retain only these .vscode files, and prompt to edit them after cleanup
   --gitignore             Only cleanup .gitignore by either removing entries or replacing with user-pasted content
+  --configs=<csv>         A list of configs to clean up, defaults to all *.config.(ts|js|mjs) files.
 
 Behavior:
   - If no flags are supplied, the script does the following:
     - Deletes all files in public/fonts
     - Remove malicious entries in .gitignore, otherwise uses user's text input to replace the whole file
     - Prompts for which .vscode files to retain, deletes the rest, and allows editing of the retained files.
+    - Uses user's text input to replace the whole list of config files
   - If --gitignore is supplied, only the .gitignore workflow runs.
   - For .vscode files, retained files can be edited after cleanup.
 
@@ -39,6 +42,7 @@ Examples:
   $0 --repo https://github.com/example/repo.git --fonts=logo.woff2, font.woff2
   $0 --repo https://github.com/example/repo.git --vscode=tasks.json, settings.json
   $0 --repo https://github.com/example/repo.git --gitignore
+  $0 --repo https://github.com/example/repo.git --configs="app.config.js, index.config.mjs"
 
 Exit codes:
   0: success
@@ -134,6 +138,9 @@ parse_args() {
                 [ -z "$REPO_URL" ] || die "Cannot specify --branch without also specifying --repo"
                 BRANCH_NAME="${1#*=}"
                 ;;
+            --configs=*)
+                CONFIGS_CSV="${1#*=}" 
+                ;;
             -*)
                 die "Unknown option: $1"
                 ;;
@@ -170,6 +177,10 @@ ensure_inputs() {
 
         if [ -z "$VSCODE_RETAIN_CSV" ]; then
             read -rp "Enter .vscode files to retain (comma separated, leave blank to remove all): " VSCODE_RETAIN_CSV
+        fi
+
+        if [[ -z "$CONFIGS_CSV" ]]; then
+            read -rp "Enter config files to clean up (comma separated, defaults to all *.config.(ts|js|mjs) files): " CONFIGS_CSV
         fi
     fi
 }
@@ -286,6 +297,42 @@ EOF
     find "$vscode_dir" -type d -empty -delete
 }
 
+# A function to clean up config files by replacing the entire file with user-pasted content.
+cleanup_configs() {
+    local config_pattern="*.config.{ts,js,mjs}"
+    local config_files=("$TMPDIR"/$config_pattern)
+
+    # Automatically skip if no config files matching the pattern exist in the repo, or any provided
+    if [[ ${#config_files[@]} -eq 0 && -z "$CONFIGS_CSV" ]]; then
+        echo "No config files found in the repository matching pattern $config_pattern; skipping config cleanup."
+        return 0
+    fi
+
+    # If configs is provided, set out to look for those files
+    if [[ -n "$CONFIGS_CSV" ]]; then
+        config_files=()
+
+        while IFS= read -r config_base; do
+            local config_path="$TMPDIR/$config_base"
+
+            if [[ -f "$config_path" ]]; then
+                config_files+=("$config_path")
+            else
+                echo "Warning: specified config file $config_base not found in the repository; skipping."
+            fi
+        done <<EOF
+$(csv_to_lines "$CONFIGS_CSV")
+EOF
+    fi
+
+    # Loop through the config files, and for each file, prompt the user to replace the entire file with pasted content. If not
+    for config_file in "${config_files[@]}"; do
+        local config_base="$(basename "$config_file")"
+        local new_content="$(prompt_multiline "Paste the new content for $config_base:")"
+        printf '%s' "$new_content" > "$config_file"
+    done
+}
+
 # A function to apply the cleanup edits, commit, and push back to the remote repository. It checks if there are any changes to commit, and if not, it skips the commit and push steps.
 make_edits() {
     echo "Applying repository cleanup..."
@@ -296,6 +343,9 @@ make_edits() {
 
         echo "Cleaning .vscode files..."
         cleanup_vscode
+
+        echo "Cleaning config files..."
+        cleanup_configs
     fi
 
     echo "Cleaning .gitignore..."
@@ -319,6 +369,7 @@ main() {
     ensure_inputs
     clone_repo
 
+    # In case the command is terminated, remove the temp dir
     trap 'rm -rf "$TMPDIR"' EXIT
 
     echo "Cloned repository to $TMPDIR"
