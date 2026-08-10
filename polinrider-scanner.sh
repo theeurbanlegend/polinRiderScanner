@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# PolinRider Malware Scanner v1.2
+# PolinRider Malware Scanner v1.0
 # https://opensourcemalware.com
 #
 # Scans local git repositories for evidence of PolinRider malware infection.
@@ -25,20 +25,26 @@ JS_ALL=0
 SCAN_DIR=""
 
 # PolinRider signatures — original variant (Mar 2026)
-PRIMARY_SIG='("rmcej%otb%",2857687)'
-SECONDARY_SIG="global\['.+'\]=.*"
+SIG_VARIANTS=(
+'("rmcej%otb%",2857687)'
+"global['!']='8-270-2';var _\\\$_1e42="
+'("Cot%3t=shtP",1111436)'
+"global['_V']='8-"
+"global.i=A10"
+)
 
-# PolinRider signatures — rotated variant (Apr 2026, Cot%3t=shtP)
-# Architecture identical; all unique fingerprints rotated as an evasion response to the
-# published rmcej_otb_payload YARA rule. Both variants are currently active in the wild.
-PRIMARY_SIG_V2='("Cot%3t=shtP",1111436)'
 
 # Known config file glob patterns (used with find -name)
 # Note: App.js (capital A) and app.js are different files on case-sensitive (Linux) filesystems
 CONFIG_PATTERNS=(
-    ".*\.config\.(ts|js|mjs)$"
-    ".*\.woff2$"
-    ".*(app|index|truffle)\.js$"
+    "*.config.ts"
+    "*.config.js"
+    "*.config.mjs"
+    "*.woff2"
+    "App.js"
+    "app.js"
+    "index.js"
+    "truffle.js"
 )
 
 # TasksJacker / PolinRider merged cluster — known Vercel-hosted C2 subdomains
@@ -121,16 +127,20 @@ log_verbose() {
         printf "  ${CYAN}[verbose]${RESET} %s\n" "$1"
     fi
 }
-
 # Check a single file for any known PolinRider signature (both variants).
 # Prints a space-separated list of matched variant labels, empty string if clean.
 # A file can carry both variants simultaneously (re-infection case documented in Apr 2026).
 detect_variant() {
     local file="$1"
     local variants=""
-    grep -qF "$PRIMARY_SIG"      "$file" 2>/dev/null && variants="${variants}v1-primary "
-    grep -qP "$SECONDARY_SIG"    "$file" 2>/dev/null && variants="${variants}v1-secondary "
-    grep -qF "$PRIMARY_SIG_V2"   "$file" 2>/dev/null && variants="${variants}v2-primary "
+    local sig
+
+    for sig in "${SIG_VARIANTS[@]}"; do
+        if grep -qF -- "$sig" "$file" 2>/dev/null; then
+            variants="${variants}${sig} "
+        fi
+    done
+
     printf '%s' "${variants% }"
 }
 
@@ -153,7 +163,7 @@ scan_for_signatures() {
                     finding_count=$((finding_count + 1))
                 fi
             fi
-        done < <(find "$scan_dir" -regextype posix-extended -iregex "$pattern" -type f \
+        done < <(find "$scan_dir" -name "$pattern" -type f \
             -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null)
     done
 
@@ -162,19 +172,19 @@ scan_for_signatures() {
     if [ "$JS_ALL" -eq 1 ]; then
         while IFS= read -r jsfile; do
             if [ -f "$jsfile" ]; then
-                # Make note of already scanned files
                 local fname already_scanned
                 fname="$(basename "$jsfile")"
-
-                # Mark as scanned if in the config gile
-                if [[ "$fname" =~ $pattern ]]; then
-                    continue
-                fi
+                already_scanned=0
+                for p in "${CONFIG_PATTERNS[@]}"; do
+                    case "$fname" in
+                        $p) already_scanned=1; break ;;
+                    esac
+                done
+                [ "$already_scanned" -eq 1 ] && continue
 
                 log_verbose "Checking $jsfile"
                 local variant
                 variant="$(detect_variant "$jsfile")"
-                
                 if [ -n "$variant" ]; then
                     findings="${findings}  ${RED}-${RESET} ${BOLD}${jsfile}${RESET}: PolinRider payload detected (${variant})\n"
                     finding_count=$((finding_count + 1))

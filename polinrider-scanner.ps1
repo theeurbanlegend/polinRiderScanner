@@ -34,7 +34,6 @@
       1 - Infections found
       2 - Error (invalid path, etc.)
 #>
-
 [CmdletBinding()]
 param (
     [Parameter(Position = 0)]
@@ -48,19 +47,16 @@ $ErrorActionPreference = "Stop"
 
 $VERSION = "1.2"
 
-# PolinRider signatures — original variant (Mar 2026)
-# In PS double-quoted strings: \ is always literal, `$ is an escaped literal $
-$PRIMARY_SIG   = '("rmcej%otb%",2857687)'
-$SECONDARY_SIG = "global['!']='8-270-2';var _\`$_1e42="
-
-# PolinRider signatures — rotated variant (Apr 2026, Cot%3t=shtP)
-# Architecture identical; all unique fingerprints rotated as an evasion response to the
-# published rmcej_otb_payload YARA rule. Both variants are currently active in the wild.
-$PRIMARY_SIG_V2   = '("Cot%3t=shtP",1111436)'
-$SECONDARY_SIG_V2 = "global['_V']='8-"
+# PolinRider signatures
+$SIG_VARIANTS = @(
+    '("rmcej%otb%",2857687)'
+    "global['!']='8-270-2';var _`$_1e42="
+    '("Cot%3t=shtP",1111436)'
+    "global['_V']='8-"
+    "global.i=A10"
+)
 
 # Known config file glob patterns
-# Note: App.js (capital A) and app.js are different files on case-sensitive (Linux) filesystems
 $CONFIG_PATTERNS = @(
     "*.config.ts"
     "*.config.js"
@@ -73,7 +69,6 @@ $CONFIG_PATTERNS = @(
 )
 
 # TasksJacker / PolinRider merged cluster — known Vercel-hosted C2 subdomains
-# Used in .vscode/tasks.json curl|bash payloads with runOn:folderOpen
 $C2_DOMAINS = @(
     "260120.vercel.app"
     "default-configuration.vercel.app"
@@ -95,9 +90,9 @@ $MALICIOUS_PACKAGES = @(
     "tailwindcss-animate-style"
 )
 
-# Counters — kept separate so files and repo artifacts aren't summed into a meaningless total
-$script:InfectedFiles = 0   # files with malware signatures (phase 1)
-$script:InfectedRepos = 0   # git repos with malicious artifacts (phase 2)
+# Counters
+$script:InfectedFiles = 0
+$script:InfectedRepos = 0
 $script:TotalRepos    = 0
 
 #region Helpers
@@ -112,18 +107,19 @@ function Write-Banner {
 }
 
 function Test-Signature ([string]$FilePath) {
-    # Returns a space-separated string of matched variant labels, or $null if clean.
-    # A file can carry both variants simultaneously (re-infection case documented Apr 2026).
     try {
         $content = [System.IO.File]::ReadAllText($FilePath)
-        $variants = @()
-        if ($content.Contains($PRIMARY_SIG))      { $variants += "v1-primary" }
-        if ($content.Contains($SECONDARY_SIG))    { $variants += "v1-secondary" }
-        if ($content.Contains($PRIMARY_SIG_V2))   { $variants += "v2-primary" }
-        if ($content.Contains($SECONDARY_SIG_V2)) { $variants += "v2-secondary" }
-        if ($variants.Count -gt 0) { return ($variants -join " ") }
+        $matched = @()
+        foreach ($sig in $SIG_VARIANTS) {
+            if ($content.Contains($sig)) {
+                $matched += $sig
+            }
+        }
+        if ($matched.Count -gt 0) {
+            return ($matched -join " ")
+        }
     } catch {
-        # Unreadable file — skip silently
+        # Unreadable file, skip
     }
     return $null
 }
@@ -137,17 +133,12 @@ function Invoke-SignatureScan ([string]$ScanPath, [bool]$AllJs) {
 
     Write-Verbose "Scanning for signatures under: $ScanPath"
 
-    # Build the set of files to check
     $patterns = $CONFIG_PATTERNS
     if ($AllJs) {
         $patterns = $patterns + "*.js"
     }
 
-    # Collect unique file paths matching any pattern, excluding node_modules/.git
-    # Use Ordinal (case-sensitive) on Linux/macOS where the FS is case-sensitive;
-    # OrdinalIgnoreCase only on Windows to avoid deduplicating different files
-    $comparer = if ($IsWindows) { [System.StringComparer]::OrdinalIgnoreCase } `
-                else            { [System.StringComparer]::Ordinal }
+    $comparer = if ($IsWindows) { [System.StringComparer]::OrdinalIgnoreCase } else { [System.StringComparer]::Ordinal }
     $files = [System.Collections.Generic.HashSet[string]]::new($comparer)
 
     foreach ($pattern in $patterns) {
@@ -186,7 +177,7 @@ function Invoke-SignatureScan ([string]$ScanPath, [bool]$AllJs) {
 #region Phase 2 — Git artifact checks
 
 function Invoke-GitArtifactCheck ([string]$RepoDir) {
-    $findings  = @()
+    $findings = @()
 
     Write-Verbose "Checking git artifacts: $RepoDir"
 
@@ -200,7 +191,6 @@ function Invoke-GitArtifactCheck ([string]$RepoDir) {
 
     $gitignorePath = Join-Path $RepoDir ".gitignore"
     if (Test-Path $gitignorePath) {
-        # Use -cmatch (case-sensitive) — .gitignore is case-sensitive on Linux
         $injected = Get-Content $gitignorePath -ErrorAction SilentlyContinue |
             Where-Object { $_ -cmatch '^(config|temp-auto)\.bat$' }
         foreach ($entry in $injected) {
@@ -208,7 +198,6 @@ function Invoke-GitArtifactCheck ([string]$RepoDir) {
         }
     }
 
-    # Check git reflog for amend activity (only flag if combined with other findings)
     $gitDir = Join-Path $RepoDir ".git"
     if ((Test-Path $gitDir) -and ($findings.Count -gt 0)) {
         try {
@@ -236,7 +225,7 @@ function Invoke-GitArtifactCheck ([string]$RepoDir) {
 
 #endregion
 
-#region Phase 3 — tasks.json scan (TasksJacker / PolinRider merged cluster)
+#region Phase 3 — tasks.json scan
 
 function Invoke-TasksJsonScan ([string]$ScanPath) {
     $findingCount = 0
@@ -245,7 +234,6 @@ function Invoke-TasksJsonScan ([string]$ScanPath) {
 
     $taskFiles = Get-ChildItem -Path $ScanPath -Filter "tasks.json" -Recurse -File -Force -ErrorAction SilentlyContinue |
         Where-Object {
-            # Only care about .vscode/tasks.json — cross-platform via Directory.Name
             $_.Directory.Name -eq ".vscode" -and
             $_.FullName -notmatch [regex]::Escape([IO.Path]::DirectorySeparatorChar + "node_modules" + [IO.Path]::DirectorySeparatorChar)
         }
@@ -267,7 +255,6 @@ function Invoke-TasksJsonScan ([string]$ScanPath) {
                 $fileFindings += "StakingGame-UUID"
             }
 
-            # Heuristic: task auto-executes curl/wget when folder is opened
             if (($content -cmatch "folderOpen") -and ($content -cmatch "curl|wget")) {
                 $fileFindings += "runOn:folderOpen+curl/wget"
             }
@@ -343,13 +330,11 @@ function Invoke-PackageJsonScan ([string]$ScanPath) {
 
 #region Entry point
 
-# Resolve scan directory to an absolute string path
 if ([string]::IsNullOrEmpty($ScanDir)) {
     $ScanDir = (Get-Location).Path
 }
 
 try {
-    # Convert-Path always returns a [string], avoiding PathInfo.Path access entirely
     $ScanDir = Convert-Path $ScanDir
 } catch {
     Write-Error "Directory not found or not accessible: $ScanDir"
@@ -366,11 +351,9 @@ Write-Host "Scanning: " -NoNewline
 Write-Host $ScanDir -ForegroundColor White
 Write-Host ""
 
-# Phase 1: config file signature scan (filesystem-wide, not limited to git repos)
 Write-Host "Checking config files for malware signatures..."
 Invoke-SignatureScan -ScanPath $ScanDir -AllJs $JsAll.IsPresent | Out-Null
 
-# Phase 2: git repository artifact checks
 $gitDirs = Get-ChildItem -Path $ScanDir -Filter ".git" -Recurse -Directory -Force -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -eq ".git" }
 
@@ -384,17 +367,14 @@ if ($script:TotalRepos -gt 0) {
     }
 }
 
-# Phase 3: .vscode/tasks.json TasksJacker check (PolinRider merged cluster)
 Write-Host ""
 Write-Host "Checking .vscode/tasks.json files for TasksJacker payloads..."
 Invoke-TasksJsonScan -ScanPath $ScanDir | Out-Null
 
-# Phase 4: package.json malicious npm dependency check
 Write-Host ""
 Write-Host "Checking package.json for malicious npm packages..."
 Invoke-PackageJsonScan -ScanPath $ScanDir | Out-Null
 
-# Summary
 Write-Host ""
 Write-Host "========================================"
 if ($script:InfectedFiles -gt 0 -or $script:InfectedRepos -gt 0) {
@@ -414,8 +394,6 @@ if ($script:InfectedFiles -gt 0 -or $script:InfectedRepos -gt 0) {
     Write-Host ""
     Write-Host "REMEDIATION STEPS:"
     Write-Host "1. Remove the obfuscated payload from the end of infected config files"
-    Write-Host "   (anything after the legitimate config beginning with global['!'] or global['_V'])"
-    Write-Host "   Covers both variants: rmcej%otb% (original) and Cot%3t=shtP (rotated Apr 2026)"
     Write-Host "2. Delete temp_auto_push.bat and config.bat if present"
     Write-Host "3. Remove 'config.bat' from .gitignore"
     Write-Host "4. Remove any malicious .vscode/tasks.json files referencing known C2 subdomains"
@@ -423,7 +401,7 @@ if ($script:InfectedFiles -gt 0 -or $script:InfectedRepos -gt 0) {
     Write-Host "6. Check npm global packages and VS Code extensions for the initial dropper"
     Write-Host "7. Rotate all secrets/tokens in scope during any compromised build"
     Write-Host "8. Force-push clean versions to GitHub"
-    Write-Host "9. Re-scan periodically — the actor re-infects previously-cleaned repos"
+    Write-Host "9. Re-scan periodically"
     Write-Host "10. Report to https://opensourcemalware.com"
     Write-Host ""
     exit 1
