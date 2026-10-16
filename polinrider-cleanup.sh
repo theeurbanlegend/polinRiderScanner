@@ -230,7 +230,7 @@ main() {
       ;;
     -r)
       # Ensure repo is in the valid format
-      if [[ "$2" =~ ^[^/]+/[^/]$ ]]; then
+      if [[ "$2" =~ ^[^/]+/[^/]+$ ]]; then
         CURRENT_REPO="$2"
         shift 2
       else
@@ -241,7 +241,7 @@ main() {
       ;;
     --repo=*)
       # Ensure repo is in the valid format
-      if [[ "$1" =~ ^repo=[^/]+/[^/]$ ]]; then
+      if [[ "$1" =~ ^repo=[^/]+/[^/]+$ ]]; then
         CURRENT_REPO="${1#=}"
         shift
       else
@@ -298,30 +298,55 @@ main() {
   printf "\n\n"
 
   # Then once we have our data, compare the hash with the one before per branch
-  local total_branches
-  local total_before_hashes
-  local total_after_hashes
+  local total_branches=()
+  local total_before_hashes=()
+  local total_after_hashes=()
 
   while read -r line; do
     local trimmed_line=$(trim_string "$line")
     total_branches=("${total_branches[@]}" "$trimmed_line")
-  done < <(echo "$repo_activity" | jq '.data[].ref | sub("^refs/heads/"; "")')
+  done < <(echo "$repo_activity" | jq -r '.data[].ref | sub("^refs/heads/"; "")')
 
   while read -r line; do
     local trimmed_line=$(trim_string "$line")
     total_before_hashes=("${total_before_hashes[@]}" "$trimmed_line")
-  done < <(echo "$repo_activity" | jq '.data[].before')
+  done < <(echo "$repo_activity" | jq -r '.data[].before')
 
   while read -r line; do
     local trimmed_line=$(trim_string "$line")
     total_after_hashes=("${total_after_hashes[@]}" "$trimmed_line")
-  done < <(echo "$repo_activity" | jq '.data[].after')
+  done < <(echo "$repo_activity" | jq -r '.data[].after')
 
   # Proceed by looping through all the branches, asking for confirmation before making a force push
   printf "Cleaning up the branches...\n\n"
 
-  for ((i = 0; i < "${#total_branches}"; i++)); do
-    echo "$i"
+  for ((i = 0; i < ${#total_branches[@]}; i++)); do
+    printf "%d: Looking into branch $GREEN$BOLD%s$RESET..." $((i + 1)) "${total_branches[i]}\n"
+    # Get if there's a diff involved
+    # Anything other than identical shows there's a change to be affected by our force push
+    local diff_status=$(call_gh_api "/repos/$CURRENT_REPO/compare/${total_after_hashes[i]}...${total_branches[i]}" "-q .status")
+
+    if [[ "$diff_status" == "identical" ]]; then
+      log_success "We can safely force push change to main"
+    else
+      log_warning "Oops, there's been a diff, displaying it..."
+
+      # Run git combo
+      git fetch origin "${total_after_hashes[i]}"
+      git fetch origin "${total_branches[i]}"
+      git diff "${total_after_hashes[i]}"...origin/"${total_branches[i]}" --stat
+    fi
+
+    # Irregardless, confirm before making the changes
+    if confirm "Shall we proceed, you can also choose to skip if there is need to handle this branch separately? [y\N]"; then
+      # Checkout to branch, and reset there
+      git fetch origin "${total_before_hashes[i]}"
+      git checkout origin/"${total_branches[i]}"
+      git reset --hard "${total_before_hashes[i]}"
+      git push -f
+
+      log_success "$GREEN$BOLD${total_branches[i]} reset successfully"
+    fi
   done
 }
 
