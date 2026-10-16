@@ -15,7 +15,7 @@ set -euo pipefail
 # 8. Rinse and repeat🏀
 #
 # Parameters
-# -b <branches>, --branches=<branches>: A comma separated list of branches to fix (Defaults to all affected branches)
+# -b <branch>, --branch=<branch>: A specific branch to perform the operation on (Defaults to all affected branches)
 # -a <actor>, --actor=<actor>: The github username to look out for (Defaults to current logged in user)
 # -t <time-period>, --time-period=<time-period>: The ***optional*** time-period of the force pushes in the branches to filter. Can be day, week, month, quarter, year. It filters the actual API call to be within this period.
 # -r <repo>, --repo=<repo>: The repo to work on (Defaults to current repo's origin). Must be either a http url or in the format owner/repo
@@ -45,7 +45,7 @@ fi
 
 ## Declaring internal functions
 VERSION="2.0"
-GIT_BRANCHES=""
+GIT_BRANCH=""
 ACTOR=""
 TIME_PERIOD=""
 CURRENT_REPO=""
@@ -82,31 +82,10 @@ trim_string() {
   echo "$string"
 }
 
-# A function that forms an array off of a string of names
-# Parameters:
-# 1. The string to separate its values
-# 2. The array to populate, you pass an array value for the variable to be populated
-csv_to_array() {
-  # Ensure the string is valid
-  if [[ ! "$1" =~ ^[^,]+(,[^,]+)?$ ]]; then
-    log_error "The string to form an array from $1 is invalid"
-    exit 1
-  fi
-
-  # Form an array of the values
-  local -n array="$2"
-
-  # trim every entry
-  while IFS=, read -r line; do
-    trimmed_line=$(trim_string "$line")
-    array=("${array[@]}" "$trimmed_line")
-  done <<<"$1"
-}
-
 # A function that calls the github cli with the appropriate headers and path, while handling error objects
 # Parameters
 # 1. The route at which to call the api
-# 2. Any additional params to pass to the client
+# 2. Any additional params to pass to the client, as a space separated string
 # Returns an object if the call to the api succeeded, or null if not
 # Actually returns the following via the return keyword
 # 0: If the call succeeded, and the object is valid. Object "returned" via echo
@@ -160,7 +139,7 @@ print_banner() {
 print_help() {
   printf "Usage: %s [...options]\n" "$0"
   printf "Options:\n\n"
-  printf "  -b <branches>, --branches=<branches>: A comma separated list of branches to fix (Defaults to all affected branches)\n"
+  printf "  -b <branch>, --branch=<branch>: A specific branch to perform the operation on (Defaults to all affected branches)\n"
   printf "  -a <actor>, --actor=<actor>: The github username to look out for (Defaults to current logged in user)\n"
   printf "  -t <time-period>, --time-period=<time-period>: The ***optional*** time-period of the force pushes in the branches to filter. Can be day, week, month, quarter, year. It filters the actual API call to be within this period.\n"
   printf "  -r <repo>, --repo=<repo>: The repo to work on (Defaults to current repo's origin). Must be either a format 'owner/repo'\n"
@@ -179,6 +158,29 @@ check_dependencies() {
   fi
 }
 
+# A function that calls the api and formats the results accordingly
+get_repo_activity() {
+  # Get the right query string
+  # 1. Must be a force push
+  # 2. Must be of the set actor
+  local query_string="/repos/$CURRENT_REPO/activity?activity_type=force_push&actor=$ACTOR"
+
+  # 3. If there was a timer, set it
+  if [[ -n "$TIME_PERIOD" ]]; then
+    query_string="$query_string&time_period=$TIME_PERIOD"
+  fi
+
+  # 4. If the branches given are one, we call it
+  if [[ -n "$GIT_BRANCH" ]]; then
+    query_string="$query_string&ref=$GIT_BRANCH"
+  fi
+
+  # Get the right params to pass through
+  local jq_query="-q {data: map({before, after, ref}), total: length}"
+  local result=$(call_gh_api "$query_string" "$jq_query")
+  echo "$result"
+}
+
 # The main function, accepts all params
 main() {
   # Get the params
@@ -189,26 +191,12 @@ main() {
       exit 0
       ;;
     -b)
-      # If its a branch list, ensure we only get words that are comma separated
-      if [[ "$2" =~ ^[^,]+(,[^,]+)?$ ]]; then
-        GIT_BRANCHES="$2"
-        shift 2
-      else
-        log_error "The branches provided need to be a list of comma separated values: $2\n\n"
-        print_help
-        exit 1
-      fi
+      GIT_BRANCH="$2"
+      shift 2
       ;;
     --branches=*)
-      # If its a branch list, ensure we only get words that are comma separated
-      if [[ "$1" =~ ^branches=[^,]+(,[^,]+)?$ ]]; then
-        GIT_BRANCHES="${1#=}"
-        shift
-      else
-        log_error "The branches provided need to be a list of comma separated values: ${1#=}\n\n"
-        print_help
-        exit 1
-      fi
+      GIT_BRANCH="${1#=}"
+      shift
       ;;
     -a)
       ACTOR="$2"
@@ -221,7 +209,7 @@ main() {
     -t)
       # Ensure the period given is in the valid format
       if [[ "$2" =~ ^day|week|month|quarter|year$ ]]; then
-        TIME_PERIOD=$(trim_string "$2")
+        TIME_PERIOD="$2"
         shift 2
       else
         log_error "The time period provided is invalid: $2\n\n"
@@ -232,14 +220,13 @@ main() {
     --time-period=*)
       # Ensure the period given is in the valid format
       if [[ "$1" =~ ^time-period=(day|week|month|quarter|year)$ ]]; then
-        TIME_PERIOD=$(trim_string "${1#=}")
-        exit 1
+        TIME_PERIOD="${1#=}"
+        shift
       else
         log_error "The time period provided is invalid: ${1#=}\n\n"
         print_help
+        exit 1
       fi
-
-      shift
       ;;
     -r)
       # Ensure repo is in the valid format
@@ -287,7 +274,7 @@ main() {
   else
     printf "Attempting to set current repo...\n"
     local remote_url=$(git remote get-url origin)
-    local match="^https://github.com/([^/]+/[^/#?]+)"
+    local match="^https://github.com/([^/]+/[^/#?.]+)"
 
     # Use matching to sort this out
     if [[ "$remote_url" =~ $match ]]; then
@@ -296,6 +283,46 @@ main() {
   fi
 
   printf "Current repo set as ${GREEN}${BOLD}$CURRENT_REPO${RESET}\n\n"
+
+  # If we had a timer, communicate it
+  if [[ -n "$TIME_PERIOD" ]]; then
+    TIME_PERIOD=$(trim_string "$TIME_PERIOD")
+    printf "Current filter time set to ${GREEN}${BOLD}$TIME_PERIOD${RESET}\n\n"
+  fi
+
+  # Once those are established, we can get the repo activity based on the props
+  printf "Getting the repo activity with the configured settings...\n"
+  local repo_activity=$(get_repo_activity)
+  log_success "total activities found in the specified branch(es): "
+  echo "$repo_activity" | jq '.total'
+  printf "\n\n"
+
+  # Then once we have our data, compare the hash with the one before per branch
+  local total_branches
+  local total_before_hashes
+  local total_after_hashes
+
+  while read -r line; do
+    local trimmed_line=$(trim_string "$line")
+    total_branches=("${total_branches[@]}" "$trimmed_line")
+  done < <(echo "$repo_activity" | jq '.data[].ref | sub("^refs/heads/"; "")')
+
+  while read -r line; do
+    local trimmed_line=$(trim_string "$line")
+    total_before_hashes=("${total_before_hashes[@]}" "$trimmed_line")
+  done < <(echo "$repo_activity" | jq '.data[].before')
+
+  while read -r line; do
+    local trimmed_line=$(trim_string "$line")
+    total_after_hashes=("${total_after_hashes[@]}" "$trimmed_line")
+  done < <(echo "$repo_activity" | jq '.data[].after')
+
+  # Proceed by looping through all the branches, asking for confirmation before making a force push
+  printf "Cleaning up the branches...\n\n"
+
+  for ((i = 0; i < "${#total_branches}"; i++)); do
+    echo "$i"
+  done
 }
 
 ## Calling the functions
