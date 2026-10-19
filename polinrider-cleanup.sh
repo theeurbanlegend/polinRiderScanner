@@ -120,6 +120,7 @@ call_gh_api() {
   # Ensure the call went well, this is done by checking the contents of the error file and the result
   call_result="$?"
   local error_logs=$(cat "$temp_error_log_file")
+  rm -f "$temp_error_log_file" # clear log file to prevent bloat of temp entries
 
   # 1: If the call went well, its a success
   if (("$call_result" == 0)); then
@@ -215,12 +216,13 @@ force_push_branch() {
 
     git -C "$1" fetch origin "$2"
     git -C "$1" fetch origin "$4"
-    git diff --stat "$4"..."$2"
+    git -C "$1" diff --stat "$4..origin/$2"
   fi
 
   # Finally, ask for confirmation before proceeding
   if confirm "Are you sure you would like to proceed, force pushing is a dangerous attempt so only do so when you're sure? [y/N] "; then
-    git -C "$1" checkout "origin/$2"
+    git -C "$1" fetch origin "$3"
+    git -C "$1" checkout "$2"
     git -C "$1" reset --hard "$3"
     git -C "$1" push -f
 
@@ -403,6 +405,20 @@ check_dependencies() {
   fi
 }
 
+# A function to help cleanup after the main function in case an emergent exit occurs
+# Takes in the temp directory to clean up
+cleanup() {
+  local temp_dir="$1"
+  local previous_exit_status="$?"
+
+  if [[ -n "$temp_dir" && -d "$temp_dir" ]]; then
+    rm -rf "$temp_dir"
+    log_success "Cleaned up used file resources"
+  fi
+
+  exit "$previous_exit_status"
+}
+
 # The main function, accepts all params
 main() {
   #1: Get the params, store git branches if provided in a var
@@ -560,6 +576,9 @@ main() {
 
   # 4: If no branches are configured, call the function with the defaults
   fix_affected_branch "$temp_dir"
+
+  # 5: Finally if an error occurs, cleanup the dir used to prevent bloat
+  trap 'cleanup "$temp_dir"' EXIT
 }
 
 ## Calling the functions
