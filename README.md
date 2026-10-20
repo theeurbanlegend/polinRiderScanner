@@ -1,297 +1,69 @@
-# PolinRider Malware Scanner
+# Polinrider Malware Cleaner
 
-A standalone scanner to check your local projects for signs of **PolinRider** — a supply-chain malware family delivered through malicious npm packages.
+A cleaner script that enables you to "undo" a change caused by an unintended force push remotely, with suitable filters to help pinpoint where and how the rollback should occur.
 
----
+## Repo structure
 
-## What is PolinRider?
+The repo is organised as follows:
 
-PolinRider is a JavaScript-based malware spread through fake npm packages designed to look like legitimate libraries. Known delivery packages include `tailwind-mainanimation` and `tailwind-autoanimation`, which impersonate TailwindCSS tools.
-
-When you run `npm install`, a post-install script silently injects an obfuscated JavaScript payload into your project's config files — most commonly `postcss.config.mjs`, but also `*.config.ts`, `*.config.js`, `app.js`, and others. Because these files run automatically on every build, the malware executes every time you run `npm run dev` or `npm run build` — with no visible indication.
-
-The payload connects to blockchain-based command-and-control (C2) servers on the TRON and Aptos networks to download further instructions and exfiltrate secrets such as API keys and environment variables. It also drops a `temp_auto_push.bat` script that amends and force-pushes your git commits to GitHub, spreading the infected files to anyone who clones your repositories.
-
-The infection is designed to be silent. Files look nearly normal — the payload is hidden after hundreds of blank lines at the end of a config file.
-
-For a full technical breakdown of the campaign — including malware analysis, C2 infrastructure, obfuscation layers, IOCs, and the full list of compromised repositories — see the [OpenSourceMalware PolinRider report](https://github.com/OpenSourceMalware/PolinRider).
+1. [`polinrider-cleanup.sh`](./polinrider-cleanup.sh): The main script that is drafted for linux systems.
+2. [`polinrider cleanup.ps1`](./polinrider-cleanup.ps1): This is the cleanup script ported from the bash script for windows systems.
+3. [`v(previous_major_version)`](./v1.0/): The folder contains the scripts used prior to a major change. Currently it has the v1 forms of the cleanup scripts, similar to the current setup, plus a [README](./v1.0/README.md) on how to use it.
 
 ---
 
-## What the scanner checks
+In terms of development, the following sequence is observed by the contributors:
 
-The scanner runs four phases across the directory you point it at:
+- The scripts are released.
+- If there is a bug, or a development feature to be introduced, we add it to the bash script.
+- The bash script is ported to a powershell script, for windows users, before the final pull request merge.
+- If there is a major change, say a major shift on how conflicts are handled or defaults, the current repo is packaged in a folder at the root and the 2 scripts added alongside it.
 
-**Phase 1 — Signature scan:** Searches all config files for signatures from both active PolinRider obfuscator variants. Each match is labelled `v1-primary` / `v1-secondary` (original March 2026 variant) or `v2-primary` / `v2-secondary` (rotated April 2026 `Cot%3t=shtP` variant). A file can carry both if the machine was re-infected after a partial cleanup.
+We try to follow the [semver](https://semver.org/) versioning system with our own twist 😄.
 
-**Phase 2 — Git artifact check:** Searches every git repository in the target directory for:
+## Prerequisites
 
-- `temp_auto_push.bat` — the propagation script
-- `config.bat` — a hidden orchestrator script
-- Injected entries in `.gitignore` (used to hide the above)
-- Amended commits in `git reflog` (consistent with force-push activity)
+1. [_**Git**_](https://git-scm.com/install/): For version control, plus get the script.
+2. [_**Github cli**_](https://github.com/cli/cli#installation): To interact with github's data via the API.
+3. _**A terminal**_: Don't think a system comes without this lol, for windows we need powershell for the powershell script, while for linux and macOS we need a bash capable terminal.
 
-**Phase 3 — `.vscode/tasks.json` check:** Searches for the TasksJacker delivery vector, which merged operationally with PolinRider in April 2026. Flags any `tasks.json` that references a known Vercel-hosted C2 subdomain, the StakingGame fake-interview template UUID, or a task configured to auto-execute `curl`/`wget` when the folder is opened.
+### a) Installation guide
 
-**Phase 4 — `package.json` check:** Searches all `package.json` files for the 7 known malicious npm packages published by the threat actor, including those used in the ShoeVista fake job-interview template.
+> [!NOTE]
+> Anything in curly braces in this guide section is user provided, unless stated otherwise
 
----
-
-## Running on Windows (PowerShell)
-
-### Prerequisites
-
-- **Git** — download from [git-scm.com](https://git-scm.com) if not already installed
-- **PowerShell** — built into Windows 10 and 11 (search "PowerShell" in the Start menu)
-
-### Steps
-
-**1. Open PowerShell**
-
-Press `Win + S`, search for **PowerShell**, and open it. You do not need to run it as Administrator.
-
-**2. Clone the scanner repository**
-
-```powershell
-git clone https://github.com/theeurbanlegend/polinRiderScanner
-cd polinrider-scanner
-```
-
-**3. Allow the script to run**
-
-Windows blocks unsigned scripts by default. Run this once to allow locally-cloned scripts:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-
-Type `Y` and press Enter when prompted.
-
-**4. Run the scanner**
-
-Scan your entire projects folder (replace the path with wherever you keep your work):
-
-```powershell
-.\polinrider-scanner.ps1 C:\Users\YourName\projects
-```
-
-Or scan only the current directory:
-
-```powershell
-.\polinrider-scanner.ps1
-```
-
-**Optional flags:**
-
-| Flag       | What it does                                                |
-| ---------- | ----------------------------------------------------------- |
-| `-Verbose` | Shows every file being checked as it runs                   |
-| `-JsAll`   | Also scans all `.js` files, not just known config filenames |
-
-Example with flags:
-
-```powershell
-.\polinrider-scanner.ps1 -Verbose -JsAll C:\Users\YourName\projects
-```
-
----
-
-## Running on macOS / Linux (bash)
-
-### Prerequisites
-
-- **Git** — usually pre-installed. Confirm by running `git --version` in Terminal. If missing, install it via your package manager (`brew install git` on macOS, `sudo apt install git` on Ubuntu/Debian).
-- **Terminal** — pre-installed on all macOS and Linux systems.
-
-### Steps
-
-**1. Open Terminal**
-
-On macOS: press `Cmd + Space`, type **Terminal**, and press Enter.
-On Linux: press `Ctrl + Alt + T`, or search for Terminal in your app launcher.
-
-**2. Clone the scanner repository**
+1. Clone the repo via git. By default it clones it into `polinRiderScanner` folder in your working directory, but [as per the docs](https://git-scm.com/docs/git-clone) you can provide your own folder to clone in.
 
 ```bash
-git clone https://github.com/theeurbanlegend/polinRiderScanner
-cd polinrider-scanner
+git clone https://github.com/theeurbanlegend/polinRiderScanner ${YOUR_DIR_PATH_IF_ANY}
 ```
 
-**3. Make the script executable**
+2. Make the script executable. You can find it in the folder as from the prior step. In the case of this example that's gonna be the default, ie `polinRiderScanner`.
 
-```bash
-chmod +x polinrider-scanner.sh
-```
-
-This only needs to be done once.
-
-**4. Run the scanner**
-
-Scan your projects folder (replace the path with wherever you keep your work):
-
-```bash
-./polinrider-scanner.sh ~/projects
-```
-
-On macOS, if most of your work is on the Desktop:
-
-```bash
-./polinrider-scanner.sh ~/Desktop
-```
-
-Or scan only the current directory:
-
-```bash
-./polinrider-scanner.sh
-```
-
-**Optional flags:**
-
-| Flag        | What it does                                                |
-| ----------- | ----------------------------------------------------------- |
-| `--verbose` | Shows every file being checked as it runs                   |
-| `--js-all`  | Also scans all `.js` files, not just known config filenames |
-
-Example with flags:
-
-```bash
-./polinrider-scanner.sh --verbose --js-all ~/projects
-```
-
----
-
-## Understanding the output
-
-A clean result looks like this:
-
-```
-========================================
-  PolinRider Malware Scanner v1.2
-  https://opensourcemalware.com
-========================================
-
-Scanning: /Users/yourname/projects
-
-Checking config files for malware signatures...
-Checking 12 git repositories for artifacts...
-
-Checking .vscode/tasks.json files for TasksJacker payloads...
-Checking package.json for malicious npm packages...
-
-[CLEAN] 12 repositories scanned clean
-
-========================================
-  RESULTS: No infections found
-========================================
-```
-
-If an infection is found, the scanner prints the exact file and what was detected. The variant label tells you which obfuscator strain is present:
-
-```
-[INFECTED] 2 file(s) with malware signatures found
-  - /Users/yourname/projects/my-app/postcss.config.mjs: PolinRider payload detected (v1-primary)
-  - /Users/yourname/projects/my-app/tailwind.config.js: PolinRider payload detected (v2-primary v2-secondary)
-
-[INFECTED] /Users/yourname/projects/my-app
-  - temp_auto_push.bat: Propagation script found
-  - .gitignore: config.bat entry injected
-
-[INFECTED] 1 tasks.json file(s) with TasksJacker payload found
-  - /Users/yourname/projects/my-app/.vscode/tasks.json: Malicious tasks.json (C2:default-configuration.vercel.app)
-
-[INFECTED] 1 package.json file(s) with malicious npm dependency found
-  - /Users/yourname/projects/my-app/package.json: Malicious npm package(s): tailwindcss-style-animate
-```
-
-`v1` = original March 2026 variant. `v2` = rotated April 2026 variant (`Cot%3t=shtP`). A file showing both labels has been re-infected. The final summary shows a count of infected files and repositories.
-
----
-
-## What to do if you're infected
-
-If the scanner finds anything, work through these steps:
-
-1. **Remove the payload from infected config files.** Open the flagged file in a text editor. Scroll past the legitimate config — after the real `export default` line you will see hundreds of blank lines followed by a large block of obfuscated JavaScript. Delete everything from the first blank line after the real config to the end of the file.
-
-2. **Delete `temp_auto_push.bat` and `config.bat`** from any affected repositories.
-
-3. **Clean up `.gitignore`.** Remove any lines containing `config.bat` or `temp-auto.bat`.
-
-4. **Rotate all secrets.** Treat every `.env` variable, API key, and database credential that existed in an affected project as compromised and rotate them immediately.
-
-5. **Remove any malicious npm packages.** If the scanner flagged a `package.json`, uninstall the offending package:
+   - For linux and MacOS
 
    ```bash
-   npm uninstall tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwindcss-typography-style tailwindcss-style-modify tailwind-animationbased tailwindcss-animate-style
+   cd polinRiderScanner
+   chmod ug+x ./polinRiderScanner/polinrider-cleanup.sh
    ```
 
-   Then delete `node_modules` and run `npm install` fresh.
+   - For Windows
 
-6. **Check `.vscode/tasks.json`.** If the scanner flagged a tasks.json, delete the entire `.vscode/tasks.json` file unless you added it yourself. If a recruiter sent you a project to complete as a test, treat the whole repo as compromised — do not re-open it in VS Code.
+   ```ps1
+   cd polinRiderScanner
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   .\polinrider-cleanup.ps1 -Help
+    ```
 
-7. **Notify anyone who cloned affected repositories.** Anyone who ran `npm install` or a build on an infected version of your repo may have executed the payload on their own machine.
+3. Run the script as per the docs. This can be found by running `-h` or `--help`, or passing the args as per this documentation.
 
-8. **Force-push clean versions to GitHub** after removing the infected files and committing the clean state.
+```bash
+# Get help
+./polinRiderScanner/polinrider-cleanup.sh -h
+````
 
----
+### b) Technical understanding
 
-## Indicators of compromise (IOCs)
-
-If you want to check manually before running the scanner:
-
-**Malicious npm packages (all 7 known):**
-
-- `tailwindcss-style-animate` — primary ShoeVista template dependency
-- `tailwind-mainanimation`
-- `tailwind-autoanimation`
-- `tailwindcss-typography-style`
-- `tailwindcss-style-modify`
-- `tailwind-animationbased`
-- `tailwindcss-animate-style`
-
-**Campaign markers inside infected files:**
-
-Original variant (March 2026):
-
-```
-("rmcej%otb%",2857687)
-global['!'] = '7-1786'
-global['!'] = '8-270-2'
-```
-
-Rotated variant (April 2026 — active evasion of YARA rule):
-
-```
-("Cot%3t=shtP",1111436)
-global['_V'] = '8-st1'  (through '8-st59')
-```
-
-**Vercel-hosted C2 subdomains (TasksJacker vector):**
-
-- `260120.vercel.app`
-- `default-configuration.vercel.app`
-- `vscode-settings-bootstrap.vercel.app`
-- `vscode-settings-config.vercel.app`
-- `vscode-bootstrapper.vercel.app`
-- `vscode-load-config.vercel.app`
-
-**StakingGame fake-interview template UUID:**
-
-```
-e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9
-```
-
-Found in `.vscode/tasks.json` under `projectInfo.uuid`. If this UUID appears in a repo, the folder is a weaponized take-home test.
-
-**Blockchain C2 endpoints:**
-
-- `api.trongrid.io` (TRON — primary)
-- `fullnode.mainnet.aptoslabs.com` (Aptos — fallback)
-- `bsc-dataseed.binance.org` / `bsc-rpc.publicnode.com` (BSC)
-
-**Infected file signature:**
-
-- File: `postcss.config.mjs` (or `.js`, `.cjs`) — most common
-- Also: `tailwind.config.js`, `eslint.config.mjs`, `next.config.mjs`, `vite.config.*`, `webpack.config.js`, `App.js`, `index.js`
-- Size: ~5,500 bytes (a normal postcss config is under 200 bytes)
-- Pattern: large block of blank lines after `export default config;`, followed by obfuscated JavaScript
+> [!NOTE]
+> This section is collapsable as its not inherently needed to understand how to use the script, but if your curious of how it works and how different it is from v1
+> Feel free to skip to the next section if this is not your field of interest.
