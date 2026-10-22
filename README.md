@@ -1,297 +1,151 @@
-# PolinRider Malware Scanner
+# Polinrider Malware Cleaner
 
-A standalone scanner to check your local projects for signs of **PolinRider** — a supply-chain malware family delivered through malicious npm packages.
+A cleaner script that enables you to "undo" a change caused by an unintended force push remotely, with suitable filters to help pinpoint where and how the rollback should occur.
 
----
+## Table of contents
 
-## What is PolinRider?
+- [Repo structure](#repo-structure)
+- [Prerequisites](#prerequisites)
+  - [a) Installation guide](#a-installation-guide)
+  - [b) Technical understanding](#b-technical-understanding)
+- [Usage](#usage)
+  - [a) Flags used](#a-flags-used)
+  - [b) Best practices and procedure](#b-best-practices-and-procedure)
 
-PolinRider is a JavaScript-based malware spread through fake npm packages designed to look like legitimate libraries. Known delivery packages include `tailwind-mainanimation` and `tailwind-autoanimation`, which impersonate TailwindCSS tools.
+## Repo structure
 
-When you run `npm install`, a post-install script silently injects an obfuscated JavaScript payload into your project's config files — most commonly `postcss.config.mjs`, but also `*.config.ts`, `*.config.js`, `app.js`, and others. Because these files run automatically on every build, the malware executes every time you run `npm run dev` or `npm run build` — with no visible indication.
+The repo is organised as follows:
 
-The payload connects to blockchain-based command-and-control (C2) servers on the TRON and Aptos networks to download further instructions and exfiltrate secrets such as API keys and environment variables. It also drops a `temp_auto_push.bat` script that amends and force-pushes your git commits to GitHub, spreading the infected files to anyone who clones your repositories.
-
-The infection is designed to be silent. Files look nearly normal — the payload is hidden after hundreds of blank lines at the end of a config file.
-
-For a full technical breakdown of the campaign — including malware analysis, C2 infrastructure, obfuscation layers, IOCs, and the full list of compromised repositories — see the [OpenSourceMalware PolinRider report](https://github.com/OpenSourceMalware/PolinRider).
-
----
-
-## What the scanner checks
-
-The scanner runs four phases across the directory you point it at:
-
-**Phase 1 — Signature scan:** Searches all config files for signatures from both active PolinRider obfuscator variants. Each match is labelled `v1-primary` / `v1-secondary` (original March 2026 variant) or `v2-primary` / `v2-secondary` (rotated April 2026 `Cot%3t=shtP` variant). A file can carry both if the machine was re-infected after a partial cleanup.
-
-**Phase 2 — Git artifact check:** Searches every git repository in the target directory for:
-
-- `temp_auto_push.bat` — the propagation script
-- `config.bat` — a hidden orchestrator script
-- Injected entries in `.gitignore` (used to hide the above)
-- Amended commits in `git reflog` (consistent with force-push activity)
-
-**Phase 3 — `.vscode/tasks.json` check:** Searches for the TasksJacker delivery vector, which merged operationally with PolinRider in April 2026. Flags any `tasks.json` that references a known Vercel-hosted C2 subdomain, the StakingGame fake-interview template UUID, or a task configured to auto-execute `curl`/`wget` when the folder is opened.
-
-**Phase 4 — `package.json` check:** Searches all `package.json` files for the 7 known malicious npm packages published by the threat actor, including those used in the ShoeVista fake job-interview template.
+1. [`polinrider-cleanup.sh`](./polinrider-cleanup.sh): The main script that is drafted for linux systems.
+2. [`polinrider-cleanup.ps1`](./polinrider-cleanup.ps1): This is the cleanup script ported from the bash script for windows systems.
+3. [`v(previous_major_version)`](./v1.0/): The folder contains the scripts used prior to a major change. Currently it has the v1 forms of the cleanup scripts, similar to the current setup, plus a [README](./v1.0/README.md) on how to use it.
 
 ---
 
-## Running on Windows (PowerShell)
+In terms of development, the following sequence is observed by the contributors:
 
-### Prerequisites
+- The scripts are released.
+- If there is a bug, or a development feature to be introduced, we add it to the bash script.
+- The bash script is ported to a powershell script, for windows users, before the final pull request merge.
+- If there is a major change, say a major shift on how conflicts are handled or defaults, the current repo is packaged in a folder at the root and the 2 scripts added alongside it.
 
-- **Git** — download from [git-scm.com](https://git-scm.com) if not already installed
-- **PowerShell** — built into Windows 10 and 11 (search "PowerShell" in the Start menu)
+We try to follow the [semver](https://semver.org/) versioning system with our own twist 😄.
 
-### Steps
+## Prerequisites
 
-**1. Open PowerShell**
+1. [_**Git**_](https://git-scm.com/install/): For version control, plus get the script.
+2. [_**Github cli**_](https://github.com/cli/cli#installation): To interact with github's data via the API.
+3. _**A terminal**_: Don't think a system comes without this lol, for windows we need powershell for the powershell script, while for linux and macOS we need a bash capable terminal.
 
-Press `Win + S`, search for **PowerShell**, and open it. You do not need to run it as Administrator.
+### a) Installation guide
 
-**2. Clone the scanner repository**
+> [!NOTE]
+> Anything in curly braces in this guide section is user provided, unless stated otherwise
 
-```powershell
-git clone https://github.com/theeurbanlegend/polinRiderScanner
-cd polinrider-scanner
-```
-
-**3. Allow the script to run**
-
-Windows blocks unsigned scripts by default. Run this once to allow locally-cloned scripts:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-
-Type `Y` and press Enter when prompted.
-
-**4. Run the scanner**
-
-Scan your entire projects folder (replace the path with wherever you keep your work):
-
-```powershell
-.\polinrider-scanner.ps1 C:\Users\YourName\projects
-```
-
-Or scan only the current directory:
-
-```powershell
-.\polinrider-scanner.ps1
-```
-
-**Optional flags:**
-
-| Flag       | What it does                                                |
-| ---------- | ----------------------------------------------------------- |
-| `-Verbose` | Shows every file being checked as it runs                   |
-| `-JsAll`   | Also scans all `.js` files, not just known config filenames |
-
-Example with flags:
-
-```powershell
-.\polinrider-scanner.ps1 -Verbose -JsAll C:\Users\YourName\projects
-```
-
----
-
-## Running on macOS / Linux (bash)
-
-### Prerequisites
-
-- **Git** — usually pre-installed. Confirm by running `git --version` in Terminal. If missing, install it via your package manager (`brew install git` on macOS, `sudo apt install git` on Ubuntu/Debian).
-- **Terminal** — pre-installed on all macOS and Linux systems.
-
-### Steps
-
-**1. Open Terminal**
-
-On macOS: press `Cmd + Space`, type **Terminal**, and press Enter.
-On Linux: press `Ctrl + Alt + T`, or search for Terminal in your app launcher.
-
-**2. Clone the scanner repository**
+1. Clone the repo via git. By default it clones it into `polinRiderScanner` folder in your working directory, but [as per the docs](https://git-scm.com/docs/git-clone) you can provide your own folder to clone in.
 
 ```bash
-git clone https://github.com/theeurbanlegend/polinRiderScanner
-cd polinrider-scanner
+git clone https://github.com/theeurbanlegend/polinRiderScanner ${YOUR_DIR_PATH_IF_ANY}
 ```
 
-**3. Make the script executable**
+2. Make the script executable. You can find it in the folder as from the prior step. In the case of this example that's gonna be the default, ie `polinRiderScanner`.
 
-```bash
-chmod +x polinrider-scanner.sh
-```
-
-This only needs to be done once.
-
-**4. Run the scanner**
-
-Scan your projects folder (replace the path with wherever you keep your work):
-
-```bash
-./polinrider-scanner.sh ~/projects
-```
-
-On macOS, if most of your work is on the Desktop:
-
-```bash
-./polinrider-scanner.sh ~/Desktop
-```
-
-Or scan only the current directory:
-
-```bash
-./polinrider-scanner.sh
-```
-
-**Optional flags:**
-
-| Flag        | What it does                                                |
-| ----------- | ----------------------------------------------------------- |
-| `--verbose` | Shows every file being checked as it runs                   |
-| `--js-all`  | Also scans all `.js` files, not just known config filenames |
-
-Example with flags:
-
-```bash
-./polinrider-scanner.sh --verbose --js-all ~/projects
-```
-
----
-
-## Understanding the output
-
-A clean result looks like this:
-
-```
-========================================
-  PolinRider Malware Scanner v1.2
-  https://opensourcemalware.com
-========================================
-
-Scanning: /Users/yourname/projects
-
-Checking config files for malware signatures...
-Checking 12 git repositories for artifacts...
-
-Checking .vscode/tasks.json files for TasksJacker payloads...
-Checking package.json for malicious npm packages...
-
-[CLEAN] 12 repositories scanned clean
-
-========================================
-  RESULTS: No infections found
-========================================
-```
-
-If an infection is found, the scanner prints the exact file and what was detected. The variant label tells you which obfuscator strain is present:
-
-```
-[INFECTED] 2 file(s) with malware signatures found
-  - /Users/yourname/projects/my-app/postcss.config.mjs: PolinRider payload detected (v1-primary)
-  - /Users/yourname/projects/my-app/tailwind.config.js: PolinRider payload detected (v2-primary v2-secondary)
-
-[INFECTED] /Users/yourname/projects/my-app
-  - temp_auto_push.bat: Propagation script found
-  - .gitignore: config.bat entry injected
-
-[INFECTED] 1 tasks.json file(s) with TasksJacker payload found
-  - /Users/yourname/projects/my-app/.vscode/tasks.json: Malicious tasks.json (C2:default-configuration.vercel.app)
-
-[INFECTED] 1 package.json file(s) with malicious npm dependency found
-  - /Users/yourname/projects/my-app/package.json: Malicious npm package(s): tailwindcss-style-animate
-```
-
-`v1` = original March 2026 variant. `v2` = rotated April 2026 variant (`Cot%3t=shtP`). A file showing both labels has been re-infected. The final summary shows a count of infected files and repositories.
-
----
-
-## What to do if you're infected
-
-If the scanner finds anything, work through these steps:
-
-1. **Remove the payload from infected config files.** Open the flagged file in a text editor. Scroll past the legitimate config — after the real `export default` line you will see hundreds of blank lines followed by a large block of obfuscated JavaScript. Delete everything from the first blank line after the real config to the end of the file.
-
-2. **Delete `temp_auto_push.bat` and `config.bat`** from any affected repositories.
-
-3. **Clean up `.gitignore`.** Remove any lines containing `config.bat` or `temp-auto.bat`.
-
-4. **Rotate all secrets.** Treat every `.env` variable, API key, and database credential that existed in an affected project as compromised and rotate them immediately.
-
-5. **Remove any malicious npm packages.** If the scanner flagged a `package.json`, uninstall the offending package:
+   - For linux and MacOS
 
    ```bash
-   npm uninstall tailwindcss-style-animate tailwind-mainanimation tailwind-autoanimation tailwindcss-typography-style tailwindcss-style-modify tailwind-animationbased tailwindcss-animate-style
+   cd polinRiderScanner
+   chmod u+x ./polinRiderScanner/polinrider-cleanup.sh
    ```
 
-   Then delete `node_modules` and run `npm install` fresh.
+   - For Windows
 
-6. **Check `.vscode/tasks.json`.** If the scanner flagged a tasks.json, delete the entire `.vscode/tasks.json` file unless you added it yourself. If a recruiter sent you a project to complete as a test, treat the whole repo as compromised — do not re-open it in VS Code.
+   ```ps1
+   cd polinRiderScanner
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   .\polinrider-cleanup.ps1 -Help
+   ```
 
-7. **Notify anyone who cloned affected repositories.** Anyone who ran `npm install` or a build on an infected version of your repo may have executed the payload on their own machine.
+3. Run the script as per the docs. This can be found by running `-h` or `--help`, or passing the args as per this documentation.
 
-8. **Force-push clean versions to GitHub** after removing the infected files and committing the clean state.
+   - For linux and MacOS
 
----
+   ```bash
+   ./polinRiderScanner/polinrider-cleanup.sh -h
+   ```
 
-## Indicators of compromise (IOCs)
+   - For Windows
 
-If you want to check manually before running the scanner:
+   ```ps1
+   .\polinrider-cleanup.ps1 -Help
+   ```
 
-**Malicious npm packages (all 7 known):**
+### b) Technical understanding
 
-- `tailwindcss-style-animate` — primary ShoeVista template dependency
-- `tailwind-mainanimation`
-- `tailwind-autoanimation`
-- `tailwindcss-typography-style`
-- `tailwindcss-style-modify`
-- `tailwind-animationbased`
-- `tailwindcss-animate-style`
+> [!NOTE]
+> This section is collapsable as its not inherently needed to understand how to use the script, but if your curious of how it works and how different it is from v1
+> Feel free to skip to the next section if this is not your field of interest.
 
-**Campaign markers inside infected files:**
+Initially, this script was known as the `polinrider scanner` since we were using reported signatures from the [OpenSourceMalware PolinRider report](https://github.com/OpenSourceMalware/PolinRider). This included the following, though the thought process is best explained in the [v1 README](/v1.0/README.md#what-the-scanner-checks):
 
-Original variant (March 2026):
+- `package.json` malicious package entries.
+- Bat file entries in .gitignore, for windows persistense.
+- Payload signature in all associated config files known to be preferred by the attacker.
+- vscode files that automate extension download and execution via the debugger.
+- weird font files in the repo that contain the payload snippet.
 
-```
-("rmcej%otb%",2857687)
-global['!'] = '7-1786'
-global['!'] = '8-270-2'
-```
+While this worked best at the time, it meant that we had to keep ourselves updated with any recent developments on how the PolinRider malware has changed over time. This includes being familiar with any new updates in terms of functionality, signatures and payload storage, which can lead to issues in case a patched version of it affects a repo long before it being reported or the team being aware of the script being updated.
 
-Rotated variant (April 2026 — active evasion of YARA rule):
+It was also a bit more manual, where you had to know where you're running the script, approve of given changes and confirm if the reported changes have all been applied. Thus, for this version, extra effort was put into _**automating cleanup**_, so as to recover the repo from the malware as fast as possible rather than scanning for indicators of compromise.
 
-```
-("Cot%3t=shtP",1111436)
-global['_V'] = '8-st1'  (through '8-st59')
-```
+This is made possible by using github's source of repo activity programmatically via the API to get the latest state right before the change, and resetting the repo to that point, akin to how [git reflog](https://www.atlassian.com/ru/git/tutorials/rewriting-history/git-reflog) can be used to recover a repo's branch from a force push locally💡.
 
-**Vercel-hosted C2 subdomains (TasksJacker vector):**
+Given the malware uses force pushes to make unsigned edits of prior commits to the repo, we have to use a more permanent contract as commit history is easily editable. However, in turn given we are rewriting history ourselves via the script, extra precautions have been set up:
 
-- `260120.vercel.app`
-- `default-configuration.vercel.app`
-- `vscode-settings-bootstrap.vercel.app`
-- `vscode-settings-config.vercel.app`
-- `vscode-bootstrapper.vercel.app`
-- `vscode-load-config.vercel.app`
+- _**Using prompts**_ to confirm changes before proceeding.
+- Displaying _**brief diffs**_ between the branch in question remotely and the commit after the force push, to indicate whether any activity has taken place.
+- Making use of _**temp folders**_ to host git changes to the local repo, thus ensuring any system clones with their own progress remain untouched.
 
-**StakingGame fake-interview template UUID:**
+That being said, there's still some guidelines on how to use the script and how to understand it, best explained in the [usage](#usage) section.
 
-```
-e9b53a7c-2342-4b15-b02d-bd8b8f6a03f9
-```
+> [!TIP]
+> Given it restores branches to a given state prior to the force push, you can use it as some sort of recovery system outside polinrider in a script.
+> Whatever floats your boat, so long as you use it knowing how best to run it
 
-Found in `.vscode/tasks.json` under `projectInfo.uuid`. If this UUID appears in a repo, the folder is a weaponized take-home test.
+# Usage
 
-**Blockchain C2 endpoints:**
+The usage of the script can be described by what [flags it uses](#a-flags-used) and [best practices](#b-best-practices-and-procedure) to follow during usage.
 
-- `api.trongrid.io` (TRON — primary)
-- `fullnode.mainnet.aptoslabs.com` (Aptos — fallback)
-- `bsc-dataseed.binance.org` / `bsc-rpc.publicnode.com` (BSC)
+### a) Flags used
 
-**Infected file signature:**
+This is described via the `-h` or `--help` flag as well, all flags are _**optional**_.
 
-- File: `postcss.config.mjs` (or `.js`, `.cjs`) — most common
-- Also: `tailwind.config.js`, `eslint.config.mjs`, `next.config.mjs`, `vite.config.*`, `webpack.config.js`, `App.js`, `index.js`
-- Size: ~5,500 bytes (a normal postcss config is under 200 bytes)
-- Pattern: large block of blank lines after `export default config;`, followed by obfuscated JavaScript
+1.  `-b <branches>`, `--branches=<branches>`: The specific comma-separated list of branches to perform the operation on.
+    > Defaults to all affected branches.
+2.  `-a <actor>`, `--actor=<actor>`: The github username to look out for.
+    > Defaults to current logged in user.
+3.  `-r <repo>`, `--repo=<repo>`: The repo to work on.
+    > Defaults to current repo's origin. Must be in the format owner/repo
+4.  `-t <time-period>`, `--time-period=<time-period>`: The time-period of the force pushes in the branches to filter when calling the API. Can be `day`, `week`, `month`, `quarter`, `year`. This can be used when you're sure of when the force pushes occur, thus you want to get a subsect of them in that period from the API rather than calling for all force pushes, saving time and bandwidth.
+5.  `-s <date>`, `--since=<date>`: Filter the response from the API to all force pushes beyond this date. It is _**inclusive**_ and must be in YYYY-MM-DD format.
+    > [!NOTE] Its in local time
+6.  `-u <date>`, `--until=<date>`: Filter the response from the API to all force pushes before this date. It is _**inclusive**_ and must be in YYYY-MM-DD format.
+    > [!NOTE] Its in local time
+7.  `-h`, `--help`: Show this guide
+
+### b) Best practices and procedure
+
+1. Ensure you _**target the repo you have access to**_ , if you're inside the repo folder locally the default will sort you out though preferrably, pass it as an arg
+2. Pass the other options that suit your case. The default behaviour is to look for _**all latest force pushes owned by you across all branches**_ but depending on your case, this could be different
+3. Run the script, and follow the prompts. At some point you might be notified of a drift between when the force push occured and the latest state of the remote branch, this signals activity in a branch and as such a brief diff stat is provided. _**Kindly review it**_ and choose to proceed if you are ok with the force push.
+4. Once the script is done, go to your local repo if any and _**ensure active branches point to the ref remotely**_, this could be done by [git fetch](https://www.atlassian.com/ru/git/tutorials/syncing/git-fetch), [git pull](https://www.atlassian.com/ru/git/tutorials/syncing/git-pull) or [git rebase](https://www.atlassian.com/ru/git/tutorials/rewriting-history/git-rebase).
+5. If your issue was fixing a hiccup from a given point of force push, all is well at this point, however if you were affected by the polinrider malware the cleaner restores the selected remote branches to an earlier commit. It is not a complete malware-removal procedure. Local machines, credentials,
+6. dependencies, caches, secrets, and untracked files require separate cleanup..
+7. _**Reinstall dev packages**_ in the local repo, since the malware entries are cleared from the lockfile if any, we need to rerun the installation to clear them from the `node_modules` folder or cache.
+8. _**Clear unknown files**_, it might be the case that there were files added in the .gitignore by the malicious actor, which after updating local with the state before persist in your worktree as `untracked files`. Delete those that you don't recognise as keeping them around might cause a re-entry, say batch files for instance.
+9. _**Rotate env secrets**_, given the malware might have accessed your `.env` secrets and local dev keys, generate new ones to avoid them affecting any real connected services. If you're using mocks it wouldn't hurt to run this nonetheless.
+10. _**Fix github credentials**_, based on your editor of choice, especially vscode and its clones like cursor, you might have had access tokens to your authenticated editor read and used later on for more force pushes. To avoid this head over to [gh's apps page](https://github.com/settings/installations) and refresh any microsoft associated connections, plus those that you might not be familiar with. If you're account made the force push you can sort the connections by recency to confirm this, given any used within the last week onward is a culprit.
+
+> [!TIP]
+> By "force push", as we discussed in the [technical breakdown](#b-technical-understanding), what we mean is a force push by activity, not by commit, as one can easily impersonate a commit hash, commit message or commit author.
+> To really get the culprit, go to the "reflog" of your repo, ie the activity tab, to get the force push in question. This can't be faked as it interacts with the authenticated github account, and not the git config details during the commit.
+> As a plus you can use the date to filter down when the commit happened via the --since, --until and --time-period flags
